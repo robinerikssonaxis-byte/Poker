@@ -1,0 +1,16 @@
+{
+  "name": "Poker Night",
+  "short_name": "Poker Night",
+  "description": "Keeps track of poker buy-ins, chip counts and who owes who.",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0f5c2e",
+  "theme_color": "#3a2416",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "icon-maskable.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
+  ]
+}
