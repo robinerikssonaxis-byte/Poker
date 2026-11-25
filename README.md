@@ -47,6 +47,14 @@ kept as a backup) or to keep both.
 
 ## Good to know
 
+- **Safety:** imported session files are checked strictly before they are used.
+  Damaged or tampered files are refused with an explanation, and the app blocks
+  any script that isn't part of the app itself. Only import files from people you
+  trust anyway.
+- Every GitHub Pages project on your account shares the same web address
+  (`YOUR-USERNAME.github.io`), so those projects can read each other's stored data.
+  Don't publish other people's or untrusted code under the same GitHub account
+  (or use a separate account just for this app).
 - The data lives in Chrome's storage for this web address. Clearing Chrome's
   site data or uninstalling the app deletes it, so use **Export file** now and
   then as a backup.

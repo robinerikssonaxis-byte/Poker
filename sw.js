@@ -1,7 +1,7 @@
 // Service worker: makes Poker Night work offline.
 // Files are served from the cache straight away and refreshed in the background,
 // so a new version is picked up the next time the app is opened.
-const CACHE = "poker-night-v2";
+const CACHE = "poker-night-v3";
 const FILES = [
   "./",
   "./index.html",

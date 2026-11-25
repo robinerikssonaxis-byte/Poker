@@ -235,6 +235,22 @@ document.addEventListener("keydown", (e) => {
 
 // ================================================================= render
 function render() {
+  try {
+    renderView();
+  } catch (err) {
+    console.error(err);
+    $("#tabbar").classList.add("hidden");
+    $("#view").innerHTML = `<div class="card center">
+      <h2>This session can't be shown</h2>
+      <p class="hint">${esc(err?.message || err)}</p>
+      <div class="btn-row" style="flex-direction:column;margin-top:14px">
+        <button class="btn big wide" data-action="sessions">📂 Open another session</button>
+        <button class="btn red big wide" data-action="new-session">New session</button>
+      </div></div>`;
+  }
+}
+
+function renderView() {
   const tabbar = $("#tabbar");
   if (!session) {
     tabbar.classList.add("hidden");
@@ -272,8 +288,8 @@ function viewWelcome() {
   const saved = store.list();
   return `<div class="empty-round">
     <div class="suits">${suitsHtml()}</div>
-    <h1>Welcome to Poker Night</h1>
-    <p class="hint">Keeps track of buy-ins, chip counts and who owes who.<br>Everything is saved on this phone after every tap.</p>
+    <h1>Welcome to Poker Night by Carl Flanel</h1>
+    <p class="hint">Keeps track of buy-ins, chip counts and how much Cimon lost.<br>Everything is saved on this phone after every tap.</p>
     <div class="btn-row" style="flex-direction:column;margin-top:18px">
       <button class="btn red big wide" data-action="new-session">New session</button>
       ${saved.length ? `<button class="btn big wide" data-action="sessions">📂 Continue a saved session</button>` : ""}
@@ -300,7 +316,7 @@ function viewRound() {
   const seats = Object.entries(rnd.buyins).map(([player, count], i) => `
     <div class="seat">
       <div class="seat-name">${esc(player)}</div>
-      <div class="seat-info"><b>${count}</b> buy-in${count === 1 ? "" : "s"} · ${esc(s.money(count * rnd.buy_in_cents))}</div>
+      <div class="seat-info"><b>${esc(count)}</b> buy-in${count === 1 ? "" : "s"} · ${esc(s.money(count * rnd.buy_in_cents))}</div>
       <div class="seat-buttons">
         <button class="btn small ghost" data-action="undo-buyin" data-i="${i}" ${count <= 1 ? "disabled" : ""}>Undo</button>
         <button class="btn blue" data-action="buyin" data-i="${i}">+ Buy-in</button>
@@ -308,7 +324,7 @@ function viewRound() {
     </div>`).join("");
   return `
     <section class="card clock-card">
-      <div class="round-title">Round ${rnd.number} · started ${rnd.started.slice(11, 16)} · buy-in ${esc(s.money(rnd.buy_in_cents))}</div>
+      <div class="round-title">Round ${esc(rnd.number)} · started ${esc(rnd.started.slice(11, 16))} · buy-in ${esc(s.money(rnd.buy_in_cents))}</div>
       <div class="clock" id="clock"></div>
       <div class="clock-sub" id="clock-sub"></div>
       <div class="btn-row">
@@ -319,7 +335,7 @@ function viewRound() {
         <button class="btn small" data-action="reset-clock">⟲ Reset</button>
       </div>
       ${"wakeLock" in navigator ? `<label class="check" style="justify-content:center"><input type="checkbox" id="wake" ${wakeWanted ? "checked" : ""}> Keep screen on during the round</label>` : ""}
-      <p class="hint">Round length ${formatMinutes(Session.roundLength(rnd))}</p>
+      <p class="hint">Round length ${esc(formatMinutes(Session.roundLength(rnd)))}</p>
     </section>
     <p class="hint center">Tap <b>+ Buy-in</b> when someone loses all their chips and buys in again.</p>
     <section class="seats">${seats}</section>
@@ -350,12 +366,12 @@ function startRoundSheet() {
 function addToRoundSheet() {
   const s = session;
   const rnd = s.activeRound;
-  const outside = s.players.filter((p) => !(p in rnd.buyins));
+  const outside = s.players.filter((p) => !Object.hasOwn(rnd.buyins, p));
   const sheet = openSheet("Add player to round",
     `${outside.length ? `<p>Who joins this round? (1 buy-in each)</p>
       ${outside.map((p) => `<label class="check"><input type="checkbox" data-name="${esc(p)}"> ${esc(p)}</label>`).join("")}`
       : `<p class="hint">All players are already in this round.</p>`}
-     <label class="field"><span>…or a new player</span><input type="text" data-new placeholder="Name" autocomplete="off"></label>`,
+     <label class="field"><span>…or a new player</span><input type="text" data-new placeholder="Name" autocomplete="off" maxlength="60"></label>`,
     `<button class="btn red big wide" data-go>Add to round</button>`);
   $("[data-go]", sheet).onclick = () => {
     const chosen = $$("input[data-name]", sheet).filter((c) => c.checked).map((c) => c.dataset.name);
@@ -378,7 +394,7 @@ function setTimeSheet() {
     `<p>How much time is left of this round?</p>
      ${timeInputHtml(left)}
      <p class="hint">Quick pick:</p>
-     <div class="btn-row">${quick.map((m) => `<button class="btn small" data-quick="${m}">${formatMinutes(m)}</button>`).join("")}</div>
+     <div class="btn-row">${quick.map((m) => `<button class="btn small" data-quick="${esc(m)}">${esc(formatMinutes(m))}</button>`).join("")}</div>
      <p class="hint">The countdown restarts from the time you set.</p>`,
     `<button class="btn red big wide" data-go>Set clock</button>`);
   $$("[data-quick]", sheet).forEach((b) => {
@@ -400,17 +416,17 @@ function countSheet(rnd, editing) {
   const s = session;
   const players = Object.keys(rnd.buyins);
   const breakdowns = new Map(Object.entries(rnd.chip_counts || {})
-    .filter(([p]) => p in rnd.buyins)
+    .filter(([p]) => Object.hasOwn(rnd.buyins, p))
     .map(([p, b]) => [p, b.map((item) => ({ ...item }))]));
   const rows = players.map((p, i) => {
-    const prefill = p in (rnd.chips || {}) ? amountText(rnd.chips[p]) : "";
+    const prefill = Object.hasOwn(rnd.chips || {}, p) ? amountText(rnd.chips[p]) : "";
     return `<div class="count-row" data-i="${i}">
       <div class="name">${esc(p)}</div>
       <div class="result" data-result></div>
       <div class="buyin-stepper"><span>Buy-ins</span>
         <div class="stepper">
           <button class="btn" data-step="-1" aria-label="One buy-in less">−</button>
-          <input type="number" inputmode="numeric" min="1" data-buyins value="${rnd.buyins[p]}">
+          <input type="number" inputmode="numeric" min="1" data-buyins value="${esc(rnd.buyins[p])}">
           <button class="btn" data-step="1" aria-label="One buy-in more">+</button>
         </div>
       </div>
@@ -455,7 +471,7 @@ function countSheet(rnd, editing) {
     const unit = rnd.buy_in_cents;
     players.forEach((p) => {
       const result = $("[data-result]", rowEl(p));
-      if (p in buyins && p in chips) {
+      if (Object.hasOwn(buyins, p) && Object.hasOwn(chips, p)) {
         const net = chips[p] - buyins[p] * unit;
         result.textContent = s.money(net, true);
         result.className = `result ${resultClass(net)}`;
@@ -533,7 +549,7 @@ function countSheet(rnd, editing) {
     const { buyins, chips, problems } = read();
     if (problems.length) return alert(problems.join("\n"));
     const chipCounts = Object.fromEntries([...breakdowns]
-      .filter(([p, b]) => p in chips && Session.breakdownTotal(b) === chips[p]));
+      .filter(([p, b]) => Object.hasOwn(chips, p) && Session.breakdownTotal(b) === chips[p]));
     const ok = editing
       ? run(() => s.editRound(rnd.number, chips, buyins, chipCounts), `Round ${rnd.number} corrected and saved`)
       : run(() => s.finishRound(chips, buyins, chipCounts), `Round ${rnd.number} finished and saved`);
@@ -555,7 +571,7 @@ function chipCountSheet(player, initial, onDone) {
         <div class="label"><b>${esc(colour)}</b><small>× ${esc(s.money(cents))}</small></div>
         <div class="stepper">
           <button class="btn" data-step="-1" aria-label="One less">−</button>
-          <input type="number" inputmode="numeric" min="0" data-count value="${start[colour] ?? 0}"
+          <input type="number" inputmode="numeric" min="0" data-count value="${esc(start[colour] ?? 0)}"
                  enterkeyhint="${i < values.length - 1 ? "next" : "done"}">
           <button class="btn" data-step="1" aria-label="One more">+</button>
         </div>
@@ -715,15 +731,15 @@ function roundTableHtml(rnd) {
   const s = session;
   const net = Session.roundNet(rnd);
   const rows = Object.entries(rnd.buyins).map(([p, n]) => `<tr>
-      <td>${esc(p)}</td><td>${n}</td><td>${esc(s.money(n * rnd.buy_in_cents))}</td>
-      <td>${p in rnd.chips ? esc(s.money(rnd.chips[p])) : "-"}</td>
-      <td class="${p in net ? resultClass(net[p]) : ""}">${p in net ? esc(s.money(net[p], true)) : "-"}</td>
+      <td>${esc(p)}</td><td>${esc(n)}</td><td>${esc(s.money(n * rnd.buy_in_cents))}</td>
+      <td>${Object.hasOwn(rnd.chips, p) ? esc(s.money(rnd.chips[p])) : "-"}</td>
+      <td class="${Object.hasOwn(net, p) ? resultClass(net[p]) : ""}">${Object.hasOwn(net, p) ? esc(s.money(net[p], true)) : "-"}</td>
     </tr>`).join("");
   const chipValues = Object.values(rnd.chips || {});
   return `<div class="table-wrap"><table class="data">
     <thead><tr><th>Player</th><th>Buy-ins</th><th>Paid in</th><th>Chips</th><th>Result</th></tr></thead>
     <tbody>${rows}</tbody>
-    <tfoot><tr><td>Total</td><td>${sum(Object.values(rnd.buyins))}</td><td>${esc(s.money(Session.roundTotalIn(rnd)))}</td>
+    <tfoot><tr><td>Total</td><td>${esc(sum(Object.values(rnd.buyins)))}</td><td>${esc(s.money(Session.roundTotalIn(rnd)))}</td>
       <td>${chipValues.length ? esc(s.money(sum(chipValues))) : "-"}</td><td></td></tr></tfoot>
   </table></div>`;
 }
@@ -739,7 +755,7 @@ function chipCountsHtml(rnd) {
     }
   }
   const rows = Object.entries(counts).map(([p, breakdown]) => `<tr><td>${esc(p)}</td>${columns.map(([c, v]) =>
-    `<td>${breakdown.find((i) => i.colour === c && i.cents === v)?.count ?? ""}</td>`).join("")}
+    `<td>${esc(breakdown.find((i) => i.colour === c && i.cents === v)?.count ?? "")}</td>`).join("")}
     <td>${esc(s.money(Session.breakdownTotal(breakdown)))}</td></tr>`).join("");
   return `<h3 style="margin-top:12px">Chips by colour</h3><div class="table-wrap"><table class="data">
     <thead><tr><th>Player</th>${columns.map(([c, v]) => `<th>${esc(c)}<br><small>${esc(s.money(v))}</small></th>`).join("")}<th>Total</th></tr></thead>
@@ -756,18 +772,18 @@ function viewHistory() {
       : rnd.edits?.length ? `<span class="tag">corrected</span>` : "";
     const timeline = (rnd.history || []).map((h) =>
       `<li>${esc(h.time.slice(11))} – ${esc(h.player)}: ${h.change > 0 ? "re-buy" : "UNDO re-buy"}</li>`).join("");
-    return `<details class="card round-card" data-round="${rnd.number}" ${openRounds.has(rnd.number) ? "open" : ""}>
+    return `<details class="card round-card" data-round="${esc(rnd.number)}" ${openRounds.has(rnd.number) ? "open" : ""}>
       <summary>
-        <div class="title"><span>Round ${rnd.number}</span>${status}</div>
+        <div class="title"><span>Round ${esc(rnd.number)}</span>${status}</div>
         <div class="meta">${esc(rnd.started.slice(0, 16))}${rnd.ended ? ` – ${esc(rnd.ended.slice(11, 16))}` : ""} ·
-          ${plural(Object.keys(rnd.buyins).length, "player")} · ${esc(s.money(Session.roundTotalIn(rnd)))} in play</div>
+          ${esc(plural(Object.keys(rnd.buyins).length, "player"))} · ${esc(s.money(Session.roundTotalIn(rnd)))} in play</div>
         ${best ? `<div class="meta">Biggest winner: <b class="win">${esc(best[0])} (${esc(s.money(best[1], true))})</b></div>` : ""}
       </summary>
       <p class="hint">Buy-in ${esc(s.money(rnd.buy_in_cents))}${rnd.edits?.length ? ` · corrected at ${esc(rnd.edits.join(", "))}` : ""}</p>
       ${roundTableHtml(rnd)}
       ${chipCountsHtml(rnd)}
       ${timeline ? `<h3 style="margin-top:12px">Re-buy timeline</h3><ul class="hint">${timeline}</ul>` : ""}
-      ${rnd.status === "finished" ? `<button class="btn wide" style="margin-top:12px" data-action="edit-round" data-round="${rnd.number}">✏ Correct this round</button>` : ""}
+      ${rnd.status === "finished" ? `<button class="btn wide" style="margin-top:12px" data-action="edit-round" data-round="${esc(rnd.number)}">✏ Correct this round</button>` : ""}
     </details>`;
   }).join("");
   return `${cards}<button class="btn wide" data-action="share-report">Share full report</button>`;
@@ -783,7 +799,7 @@ function paymentLines() {
 function viewSettle() {
   const s = session;
   const totals = [...s.totals()].sort((a, b) => b[1].net - a[1].net);
-  const rows = totals.map(([p, t]) => `<tr><td>${esc(p)}</td><td>${t.rounds}</td><td>${t.buyins}</td>
+  const rows = totals.map(([p, t]) => `<tr><td>${esc(p)}</td><td>${esc(t.rounds)}</td><td>${esc(t.buyins)}</td>
       <td>${esc(s.money(t.paid_in))}</td><td>${esc(s.money(t.cashed_out))}</td>
       <td class="${resultClass(t.net)}">${esc(s.money(t.net, true))}</td></tr>`).join("");
   const payments = s.settlement();
@@ -817,7 +833,7 @@ function viewSettle() {
 function chipEditorHtml(values) {
   const row = ([colour, cents]) => `<div class="chip-value-row">
       ${chipIcon(colour)}
-      <input type="text" data-cv-name value="${esc(colour)}" placeholder="Colour" autocomplete="off">
+      <input type="text" data-cv-name value="${esc(colour)}" placeholder="Colour" autocomplete="off" maxlength="60">
       <input type="text" inputmode="decimal" data-cv-value value="${esc(cents === "" ? "" : amountText(cents))}" placeholder="Value">
       <button class="btn small ghost" data-cv-remove aria-label="Remove colour">✕</button>
     </div>`;
@@ -865,7 +881,7 @@ function viewSettings() {
     <section class="card">
       <h2>Session</h2>
       <p>${esc(s.id)}</p>
-      <p class="hint">Started ${esc(s.data.created)} · ${plural(finished, "finished round")}<br>Everything is saved on this phone after every tap.</p>
+      <p class="hint">Started ${esc(s.data.created)} · ${esc(plural(finished, "finished round"))}<br>Everything is saved on this phone after every tap.</p>
       <div class="btn-row spread">
         <button class="btn" data-action="sessions">📂 Sessions</button>
         <button class="btn red" data-action="new-session">New session</button>
@@ -876,7 +892,7 @@ function viewSettings() {
       <h2>Players</h2>
       <ul class="player-list">${s.players.map((p) => `<li>${esc(p)}</li>`).join("") || `<li class="hint">No players yet</li>`}</ul>
       <div class="inline">
-        <input type="text" id="new-player" placeholder="New player name" autocomplete="off" enterkeyhint="done">
+        <input type="text" id="new-player" placeholder="New player name" autocomplete="off" enterkeyhint="done" maxlength="60">
         <button class="btn" data-action="add-player">Add</button>
       </div>
     </section>
@@ -934,7 +950,7 @@ function newSessionSheet() {
     `<label class="field"><span>Buy-in amount per round</span>
        <input type="text" inputmode="decimal" data-buy-in value="${esc(prev ? amountText(prev.buyIn) : "100")}"></label>
      <label class="field"><span>Currency symbol</span>
-       <input type="text" data-symbol value="${esc(prev ? prev.symbol : "$")}"></label>
+       <input type="text" data-symbol value="${esc(prev ? prev.symbol : "$")}" maxlength="20"></label>
      <label class="field"><span>Round length</span>${timeInputHtml(prev ? prev.roundMinutes : DEFAULT_ROUND_MINUTES)}</label>
      <label class="field"><span>Players (one name per line)</span>
        <textarea data-players autocomplete="off">${esc(prev ? prev.players.join("\n") : "")}</textarea></label>
@@ -973,10 +989,10 @@ function sessionsSheet() {
   const items = saved.map(({ id, updated, data }) => {
     const finished = data.rounds.filter((r) => r.status === "finished").length;
     const last = data.rounds[data.rounds.length - 1];
-    const status = last?.status === "active" ? `Round ${last.number} in progress` : finished ? "Between rounds" : "Not started";
+    const status = last?.status === "active" ? `Round ${esc(last.number)} in progress` : finished ? "Between rounds" : "Not started";
     return `<button class="btn ghost session-item ${session?.id === id ? "current" : ""}" data-id="${esc(id)}">
       <b>${esc(data.created.slice(0, 16))}</b>${session?.id === id ? " (open now)" : ""}<br>
-      <span class="hint">${esc(status)} · ${plural(finished, "round")} · saved ${esc(updated.slice(0, 16))}<br>${esc(data.players.join(", "))}</span>
+      <span class="hint">${esc(status)} · ${esc(plural(finished, "round"))} · saved ${esc(updated.slice(0, 16))}<br>${esc(data.players.join(", "))}</span>
     </button>`;
   }).join("");
   const sheet = openSheet("Sessions",
@@ -1016,15 +1032,21 @@ function exportSession() {
   toast(`Saved ${s.id}.json to Downloads`);
 }
 
+const MAX_IMPORT_BYTES = 5 * 1024 * 1024;
+
 async function importSession(file) {
+  if (file.size > MAX_IMPORT_BYTES) {
+    alert(`Could not import ${file.name}: the file is too big to be a poker session.`);
+    return;
+  }
   let data;
   try {
     data = Session.validateData(JSON.parse(await file.text()));
   } catch (err) {
-    alert(`Could not import ${file.name}:\n${err instanceof PokerError ? err.message : "the file is not valid JSON"}`);
+    alert(`Could not import ${file.name}:\n${err instanceof PokerError ? err.message : "the file is not a valid session file"}`);
     return;
   }
-  let id = sessionIdFromCreated(data.created || nowStr());
+  let id = sessionIdFromCreated(data.created);
   if (store.exists(id)) {
     const replace = confirm(`This phone already has the session from ${data.created || id}.\n\n` +
       "OK = replace it with the imported file (the current version is kept as a backup)\n" +

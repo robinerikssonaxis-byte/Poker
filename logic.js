@@ -93,6 +93,7 @@ export function validateChipValues(values) {
     const colour = String(rawColour).split(/\s+/).filter(Boolean).join(" ");
     const cents = Math.trunc(Number(rawCents));
     if (!colour) throw new PokerError("Every chip colour needs a name");
+    if (colour.length > MAX_NAME_LENGTH || colour === "__proto__") throw new PokerError(`'${colour}' can't be used as a chip colour name`);
     if (!(cents > 0)) throw new PokerError(`The value of ${colour} chips must be more than 0`);
     if (cleaned.some(([c]) => c.toLowerCase() === colour.toLowerCase())) {
       throw new PokerError(`The chip colour '${colour}' is listed twice`);
@@ -105,7 +106,104 @@ export function validateChipValues(values) {
 
 /** Session id like the desktop folder name: session_2026-11-24_134642. */
 export function sessionIdFromCreated(created) {
-  return "session_" + String(created).slice(0, 19).replace(" ", "_").replace(/:/g, "");
+  const stamp = TIME_RE.test(String(created)) ? String(created) : nowStr();
+  return "session_" + stamp.replace(" ", "_").replace(/:/g, "");
+}
+
+// ------------------------------------------------------------- validation
+export const MAX_NAME_LENGTH = 60;
+const MAX_PLAYERS = 200;
+const MAX_ROUNDS = 5000;
+const MAX_CENTS = 1e12;
+const TIME_RE = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/;
+
+const isInt = (x, min = -Infinity, max = Infinity) => Number.isSafeInteger(x) && x >= min && x <= max;
+const isPlainObject = (x) => x !== null && typeof x === "object" && !Array.isArray(x);
+const isTime = (x) => typeof x === "string" && TIME_RE.test(x);
+const isName = (x) => typeof x === "string" && x.trim() !== "" && x.length <= MAX_NAME_LENGTH && x !== "__proto__";
+
+/** Same rules as validate_session_data() in the desktop program's poker_logic.py. */
+export function validateSessionData(data) {
+  const fail = (message) => { throw new PokerError(`This is not a valid poker session file: ${message}`); };
+  if (!isPlainObject(data)) fail("it does not contain a session");
+  if (!isTime(data.created)) fail("'created' is missing or not a date and time");
+  if (!isInt(data.buy_in_cents, 1, MAX_CENTS)) fail("the buy-in is missing or invalid");
+  if (data.version !== undefined && !isInt(data.version, 0, 1000)) fail("invalid version");
+  if (data.symbol !== undefined && !(typeof data.symbol === "string" && data.symbol.length <= 20)) fail("invalid currency symbol");
+  if (data.round_minutes !== undefined && !isInt(data.round_minutes, 1, 100000)) fail("invalid round length");
+  if (data.chip_values !== undefined) {
+    if (!Array.isArray(data.chip_values) || data.chip_values.length > 50) fail("invalid chip values");
+    for (const c of data.chip_values) {
+      if (!isPlainObject(c) || !isName(c.colour) || !isInt(c.cents, 1, MAX_CENTS)) fail("invalid chip value");
+    }
+    if (data.chip_values.length) {
+      try { validateChipValues(data.chip_values.map((c) => [c.colour, c.cents])); } catch (err) { fail(err.message); }
+    }
+  }
+  if (!Array.isArray(data.players) || data.players.length > MAX_PLAYERS) fail("invalid player list");
+  const seen = new Set();
+  for (const p of data.players) {
+    if (!isName(p)) fail("invalid player name");
+    if (seen.has(p.toLowerCase())) fail(`the player '${p}' is listed twice`);
+    seen.add(p.toLowerCase());
+  }
+  const players = new Set(data.players);
+  if (!Array.isArray(data.rounds) || data.rounds.length > MAX_ROUNDS) fail("invalid list of rounds");
+  data.rounds.forEach((r, index) => {
+    const where = `round ${index + 1}`;
+    if (!isPlainObject(r) || r.number !== index + 1) fail(`${where} is missing or out of order`);
+    if (r.status !== "active" && r.status !== "finished") fail(`${where} has an invalid status`);
+    if (r.status === "active" && index !== data.rounds.length - 1) fail(`${where} is in progress but isn't the last round`);
+    if (!isTime(r.started)) fail(`${where} has an invalid start time`);
+    if (r.status === "finished" ? !isTime(r.ended) : r.ended !== null && r.ended !== undefined) fail(`${where} has an invalid end time`);
+    if (!isInt(r.buy_in_cents, 1, MAX_CENTS)) fail(`${where} has an invalid buy-in`);
+    if (r.duration_minutes !== undefined && !isInt(r.duration_minutes, 0, 100000)) fail(`${where} has an invalid length`);
+    if (!isPlainObject(r.buyins) || !isPlainObject(r.chips)) fail(`${where} is missing buy-ins or chips`);
+    for (const [p, n] of Object.entries(r.buyins)) {
+      if (!players.has(p) || !isInt(n, 1, 100000)) fail(`${where} has an invalid buy-in for '${p}'`);
+    }
+    for (const [p, c] of Object.entries(r.chips)) {
+      if (!Object.hasOwn(r.buyins, p) || !isInt(c, 0, MAX_CENTS)) fail(`${where} has invalid chips for '${p}'`);
+    }
+    if (r.status === "finished") {
+      const paidIn = Object.values(r.buyins).reduce((a, b) => a + b, 0) * r.buy_in_cents;
+      const chips = Object.values(r.chips).reduce((a, b) => a + b, 0);
+      if (Object.keys(r.chips).length !== Object.keys(r.buyins).length || paidIn !== chips) {
+        fail(`${where}: the chips don't add up to the money bought in`);
+      }
+    }
+    if (r.history !== undefined) {
+      if (!Array.isArray(r.history) || r.history.length > 100000) fail(`${where} has an invalid re-buy history`);
+      for (const h of r.history) {
+        if (!isPlainObject(h) || !isTime(h.time) || !isName(h.player) || (h.change !== 1 && h.change !== -1)) {
+          fail(`${where} has an invalid re-buy history`);
+        }
+      }
+    }
+    if (r.edits !== undefined && !(Array.isArray(r.edits) && r.edits.length <= 10000 && r.edits.every(isTime))) {
+      fail(`${where} has invalid correction times`);
+    }
+    if (r.clock !== undefined) {
+      const c = r.clock;
+      if (!isPlainObject(c) || !isTime(c.started) || !isInt(c.length_seconds, -1e9, 1e9)
+        || !isInt(c.paused_seconds, 0, 1e9) || !(c.paused_at === null || isTime(c.paused_at))) {
+        fail(`${where} has an invalid clock`);
+      }
+    }
+    if (r.chip_counts !== undefined) {
+      if (!isPlainObject(r.chip_counts)) fail(`${where} has invalid chip counts`);
+      for (const [p, breakdown] of Object.entries(r.chip_counts)) {
+        if (!Object.hasOwn(r.chips, p) || !Array.isArray(breakdown) || breakdown.length > 50) fail(`${where} has invalid chip counts`);
+        for (const i of breakdown) {
+          if (!isPlainObject(i) || !isName(i.colour) || !isInt(i.count, 0, 1e9) || !isInt(i.cents, 1, MAX_CENTS)) {
+            fail(`${where} has invalid chip counts`);
+          }
+        }
+        if (breakdown.reduce((a, i) => a + i.count * i.cents, 0) !== r.chips[p]) fail(`${where}: chip counts don't match the chips`);
+      }
+    }
+  });
+  return data;
 }
 
 // ---------------------------------------------------------------- session
@@ -125,6 +223,7 @@ export class Session {
     chipValues = null, hooks = {}) {
     if (!(buyInCents > 0)) throw new PokerError("Buy-in must be more than 0");
     if (!(roundMinutes >= 1)) throw new PokerError("Round length must be at least 1 minute");
+    if (typeof symbol !== "string" || symbol.length > 20) throw new PokerError("The currency symbol can be at most 20 characters");
     const chips = validateChipValues(chipValues || DEFAULT_CHIP_VALUES);
     const data = {
       version: DATA_VERSION,
@@ -145,12 +244,12 @@ export class Session {
     return session;
   }
 
-  /** Check that parsed JSON looks like a session file. */
+  /**
+   * Strictly check data from a session file or storage before it is used, so a damaged or
+   * malicious file can't inject content or break the app. Throws PokerError explaining the problem.
+   */
   static validateData(data) {
-    if (!data || typeof data !== "object" || !Array.isArray(data.players) || !Array.isArray(data.rounds)) {
-      throw new PokerError("This is not a poker session file (players or rounds are missing)");
-    }
-    if (!(data.buy_in_cents > 0)) throw new PokerError("This session file has no valid buy-in");
+    validateSessionData(data);
     return data;
   }
 
@@ -180,6 +279,8 @@ export class Session {
   _addPlayerName(name) {
     name = String(name).split(/\s+/).filter(Boolean).join(" ");
     if (!name) throw new PokerError("Player name cannot be empty");
+    if (name.length > MAX_NAME_LENGTH) throw new PokerError(`Player names can be at most ${MAX_NAME_LENGTH} characters`);
+    if (name === "__proto__") throw new PokerError("That name can't be used, please pick another");
     if (this.players.some((p) => p.toLowerCase() === name.toLowerCase())) {
       throw new PokerError(`There is already a player called '${name}'`);
     }
@@ -244,7 +345,7 @@ export class Session {
   _applyChipCounts(rnd, chips, chipCounts) {
     const counts = {};
     for (const [player, raw] of Object.entries(chipCounts || {})) {
-      if (!(player in chips)) throw new PokerError(`${player} is not in this round`);
+      if (!Object.hasOwn(chips, player)) throw new PokerError(`${player} is not in this round`);
       const breakdown = raw
         .map((i) => ({ colour: i.colour, count: Math.trunc(Number(i.count)), cents: Math.trunc(Number(i.cents)) }))
         .filter((i) => i.count > 0);
@@ -375,7 +476,7 @@ export class Session {
   addToRound(player) {
     const rnd = this._requireActive();
     if (!this.players.includes(player)) throw new PokerError(`Unknown player '${player}'`);
-    if (player in rnd.buyins) throw new PokerError(`${player} is already in this round`);
+    if (Object.hasOwn(rnd.buyins, player)) throw new PokerError(`${player} is already in this round`);
     rnd.buyins[player] = 1;
     this.log(`Round ${rnd.number}: ${player} joined with 1 buy-in`);
     this.save();
@@ -383,7 +484,7 @@ export class Session {
 
   addBuyin(player) {
     const rnd = this._requireActive();
-    if (!(player in rnd.buyins)) throw new PokerError(`${player} is not in this round`);
+    if (!Object.hasOwn(rnd.buyins, player)) throw new PokerError(`${player} is not in this round`);
     rnd.buyins[player] += 1;
     rnd.history.push({ time: nowStr(), player, change: +1 });
     this.log(`Round ${rnd.number}: ${player} re-bought (now ${rnd.buyins[player]} buy-ins)`);
@@ -393,7 +494,7 @@ export class Session {
 
   undoBuyin(player) {
     const rnd = this._requireActive();
-    if (!(player in rnd.buyins)) throw new PokerError(`${player} is not in this round`);
+    if (!Object.hasOwn(rnd.buyins, player)) throw new PokerError(`${player} is not in this round`);
     if (rnd.buyins[player] <= 1) throw new PokerError(`${player} only has the starting buy-in`);
     rnd.buyins[player] -= 1;
     rnd.history.push({ time: nowStr(), player, change: -1 });
@@ -499,8 +600,8 @@ export class Session {
     const net = Session.roundNet(rnd);
     const rows = Object.entries(rnd.buyins).map(([p, n]) => [
       p, n, this.money(n * unit),
-      p in rnd.chips ? this.money(rnd.chips[p]) : "-",
-      p in net ? this.money(net[p], true) : "-",
+      Object.hasOwn(rnd.chips, p) ? this.money(rnd.chips[p]) : "-",
+      Object.hasOwn(net, p) ? this.money(net[p], true) : "-",
     ]);
     const chipValues = Object.values(rnd.chips);
     const totalChips = chipValues.length ? this.money(chipValues.reduce((a, b) => a + b, 0)) : "-";
